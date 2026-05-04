@@ -1,20 +1,55 @@
 import subprocess
 import os
+import json
+import getpass
+from cryptography.fernet import Fernet
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-SVN_URL = "https://31.3.180.235/svn/sw_codesys/promau_soft_plc/release"
-REPO_DIR = os.path.join(SCRIPT_DIR, "repos/")
-OUTPUT_DIR = os.path.join(SCRIPT_DIR, "output/")
-PROJECT_NAME = "release"
-SVN_USER = ""
-SVN_PASS = ""
-CODESYS_EXE = r"C:\Program Files\CODESYS 3.5.17.30\CODESYS\Common\CODESYS.exe"
-BUILD_SCRIPT = os.path.join(SCRIPT_DIR, "codesys_build.py")
+SVN_CONFIG_FILE = os.path.join(SCRIPT_DIR, "svn.json")
+SVN_KEY_FILE    = os.path.join(SCRIPT_DIR, "svn.key")
+REPO_DIR        = os.path.join(SCRIPT_DIR, "repos")
+OUTPUT_DIR      = os.path.join(SCRIPT_DIR, "output")
+PROJECT_NAME    = "release"
+CODESYS_EXE     = r"C:\Program Files\CODESYS 3.5.17.30\CODESYS\Common\CODESYS.exe"
+BUILD_SCRIPT    = os.path.join(SCRIPT_DIR, "codesys_build.py")
+
+
+def load_key() -> Fernet:
+    if os.path.exists(SVN_KEY_FILE):
+        with open(SVN_KEY_FILE, "rb") as f:
+            return Fernet(f.read())
+    key = Fernet.generate_key()
+    with open(SVN_KEY_FILE, "wb") as f:
+        f.write(key)
+    return Fernet(key)
+
+
+def load_svn_config() -> tuple:
+    fernet = load_key()
+    if os.path.exists(SVN_CONFIG_FILE):
+        with open(SVN_CONFIG_FILE, "r") as f:
+            cfg = json.load(f)
+        password = fernet.decrypt(cfg["password"].encode()).decode()
+        return cfg["url"], cfg["user"], password
+
+    print("File svn.json non trovato. Inserisci le credenziali SVN:")
+    url      = input("  URL:      ").strip()
+    user     = input("  Utente:   ").strip()
+    password = getpass.getpass("  Password: ")
+
+    cfg = {
+        "url":      url,
+        "user":     user,
+        "password": fernet.encrypt(password.encode()).decode()
+    }
+    with open(SVN_CONFIG_FILE, "w") as f:
+        json.dump(cfg, f, indent=2)
+    print(f"Credenziali salvate in {SVN_CONFIG_FILE} (password cifrata).")
+    return url, user, password
 
 
 def select_profile() -> str:
-    # I profili sono file .profile nella cartella Profile dell'installazione
     profile_dir = os.path.join(os.path.dirname(os.path.dirname(CODESYS_EXE)), "Profiles")
     if not os.path.isdir(profile_dir):
         raise RuntimeError(f"Cartella profili non trovata: {profile_dir}")
@@ -38,11 +73,13 @@ def select_profile() -> str:
         print("Scelta non valida, riprova.")
 
 
-# 1. Seleziona profilo
+# 1. Carica config SVN
+SVN_URL, SVN_USER, SVN_PASS = load_svn_config()
+
+# 2. Seleziona profilo
 profile = select_profile()
 
-# 2. Avvia CODESYS in modalità headless con script di build
-# checkout e update SVN gestiti internamente da CODESYS
+# 3. Avvia CODESYS in modalità headless con script di build
 cmd = (
     f'"{CODESYS_EXE}" --noUI --profile="{profile}"'
     f' --runscript="{BUILD_SCRIPT}"'
